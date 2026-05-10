@@ -1,0 +1,5 @@
+order_id,customer_id,product_id,order_date,quantity,revenue,category,price,city,signup_date,total_orders,total_spent,last_order_date
+O001,C001,P101,2026-04-01,1,1500.0,Electronics,1500.0,Hanoi,2025-01-10,2,1650.0,2026-04-15
+O002,C001,P102,2026-04-15,3,150.0,Clothing,50.0,Hanoi,2025-01-10,2,1650.0,2026-04-15
+O003,C002,P101,2026-05-01,2,3000.0,Electronics,1500.0,HCM,2025-02-15,1,3000.0,2026-05-01
+O004,C003,P103,2026-05-05,1,200.0,Home,200.0,Da Nang,2025-03-20,1,200.0,2026-05-05

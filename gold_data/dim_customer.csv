@@ -1,0 +1,4 @@
+customer_id,city,signup_date,total_orders,total_spent,last_order_date
+C001,Hanoi,2025-01-10,2,1650.0,2026-04-15
+C002,HCM,2025-02-15,1,3000.0,2026-05-01
+C003,Da Nang,2025-03-20,1,200.0,2026-05-05
