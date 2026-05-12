@@ -43,7 +43,7 @@ def process_silver():
     c1 = spark.table(f"{catalog}.silver.customers").count()
     logger.info(f"  [Customers] Giữ lại {c1}/{r1} dòng (Loại bỏ {r1-c1} bản ghi lỗi định dạng).")
 
-   # 2. PRODUCTS (Cập nhật đầy đủ RULE: các thông số không được âm)
+   # 2. PRODUCTS (các thông số không được âm)
    # Thêm các filter chặn số âm cho toàn bộ kích thước và số lượng
     df_prod_raw = spark.read.parquet("/content/bronze/olist_products_dataset.parquet")
     r2 = df_prod_raw.count()
@@ -90,7 +90,7 @@ def process_silver():
     # Thực thi tính toàn vẹn tham chiếu
     df_orders = df_orders_raw.join(df_cust.select("customer_id"), "customer_id", "left_semi")
 
-    # RULE MỚI: Kiểm tra trình tự thời gian toàn diện (Purchase -> Approved -> Carrier -> Delivered)
+    # Kiểm tra trình tự thời gian toàn diện (Purchase -> Approved -> Carrier -> Delivered)
     df_orders = df_orders.filter(
         # 1. Mua hàng <= Duyệt đơn
         ((col("order_purchase_timestamp") <= col("order_approved_at")) | col("order_approved_at").isNull()) &
@@ -102,7 +102,7 @@ def process_silver():
 
     df_orders.write.format("iceberg").mode("overwrite").saveAsTable(f"{catalog}.silver.orders")
     c5 = spark.table(f"{catalog}.silver.orders").count()
-    logger.info(f"  [Orders] Giữ lại {c5}/{r5} dòng (Loại bỏ {r1-c1} bản ghi sai trình tự thời gian/không khớp mã).")
+    logger.info(f"  [Orders] Giữ lại {c5}/{r5} dòng (Loại bỏ {r5-c5} bản ghi sai trình tự thời gian/không khớp mã).")
 
     # 6. ORDER ITEMS (Xử lý không khớp mã Đơn hàng/Sản phẩm/Người bán)
     df_items_raw = spark.read.parquet("/content/bronze/olist_order_items_dataset.parquet")
