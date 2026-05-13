@@ -6,3 +6,4 @@ pyspark
 streamlit
 plotly
 psycopg2-binary
+apache-airflow
