@@ -5,8 +5,7 @@ from botocore.exceptions import ClientError
 import pandas as pd
 from dotenv import load_dotenv
 from pyspark.sql.functions import (
-    col, md5, concat_ws, to_date, dayofweek, month, quarter, year, sum as spark_sum,
-    translate, lower, regexp_replace, trim, length, datediff, unix_timestamp,
+    col, translate, lower, regexp_replace, trim, coalesce,
     radians, cos, sin, asin, sqrt, pow, avg as spark_avg, lit, count as spark_count, max as spark_max, date_format, when
 )
 
@@ -24,7 +23,6 @@ def get_s3_client():
        region_name='us-east-1'
    )
    return s3_client
-
 
 # Upload file lên S3
 def upload_to_s3(s3_client, local_file, bucket, s3_key):
@@ -57,3 +55,12 @@ def clean_city_name(col_name):
     c = lower(col(col_name))
     c = translate(c, "áàãâäéèêëíìîïóòõôöúùûüç", "aaaaaeeeeiiiiooooouuuuc")
     return trim(regexp_replace(c, "[0-9]", ""))
+
+def fix_product_name(df, spark):
+    translation_df = spark.read.csv("s3a://olist-brazillian-ecommerce-bigdata/raw/olist/product_category_name_translation/", header=True, inferSchema=True)
+
+    # Join and fallback to original Portuguese name if English translation is missing
+    return df.join(translation_df, on="product_category_name", how="left") \
+             .withColumn("category_mapped", coalesce(col("product_category_name_english"), col("product_category_name"))) \
+             .drop("product_category_name", "product_category_name_english") \
+             .withColumnRenamed("category_mapped", "product_category_name")

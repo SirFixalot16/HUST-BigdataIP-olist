@@ -32,16 +32,16 @@ spark = (
     .config("spark.hadoop.fs.s3a.path.style.access", "true")
     .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
     .config(
-        "spark.sql.catalog.demo",
+        "spark.sql.catalog.olist",
         "org.apache.iceberg.spark.SparkCatalog"
     )
     .config(
-        "spark.sql.catalog.demo.type",
+        "spark.sql.catalog.olist.type",
         "hadoop"
     )
     .config(
-        "spark.sql.catalog.demo.warehouse",
-        "s3a://big-data-didp-bucket/warehouse/"
+        "spark.sql.catalog.olist.warehouse",
+        "s3a://olist-brazillian-ecommerce-bigdata/warehouse/"
     )
     .getOrCreate()
 )
@@ -50,12 +50,12 @@ spark = (
 print("Starting to create database and tables for the silver layer")
 
 spark.sql("""
-CREATE DATABASE IF NOT EXISTS demo.silver
+CREATE DATABASE IF NOT EXISTS olist.silver
 """)
 
 
 spark.sql("""
-CREATE TABLE IF NOT EXISTS demo.silver.customers(
+CREATE TABLE IF NOT EXISTS olist.silver.customers(
     customer_id                STRING,
     customer_unique_id         STRING,
     customer_zip_code_prefix   INT,
@@ -66,7 +66,7 @@ USING iceberg
 """)
 
 spark.sql("""
-CREATE TABLE IF NOT EXISTS demo.silver.orders(
+CREATE TABLE IF NOT EXISTS olist.silver.orders(
     order_id                        STRING,
     customer_id                     STRING,
     order_status                    STRING,
@@ -80,7 +80,7 @@ USING iceberg
 """)
 
 spark.sql("""
-CREATE TABLE IF NOT EXISTS demo.silver.order_items(
+CREATE TABLE IF NOT EXISTS olist.silver.order_items(
     order_id              STRING,
     order_item_id         INT,
     product_id            STRING,
@@ -93,7 +93,7 @@ USING iceberg
 """)
 
 spark.sql("""
-CREATE TABLE IF NOT EXISTS demo.silver.order_payments(
+CREATE TABLE IF NOT EXISTS olist.silver.order_payments(
     order_id               STRING,
     payment_sequential     INT,
     payment_type           STRING,
@@ -104,7 +104,7 @@ USING iceberg
 """)
 
 spark.sql("""
-CREATE TABLE IF NOT EXISTS demo.silver.products(
+CREATE TABLE IF NOT EXISTS olist.silver.products(
     product_id                   STRING,
     product_category_name        STRING,
     product_name_lenght          INT,
@@ -119,7 +119,7 @@ USING iceberg
 """)
 
 spark.sql("""
-CREATE TABLE IF NOT EXISTS demo.silver.order_reviews(
+CREATE TABLE IF NOT EXISTS olist.silver.order_reviews(
     review_id                 STRING,
     order_id                  STRING,
     review_score              INT,
@@ -132,7 +132,7 @@ USING iceberg
 """)
 
 spark.sql("""
-CREATE TABLE IF NOT EXISTS demo.silver.sellers(
+CREATE TABLE IF NOT EXISTS olist.silver.sellers(
     seller_id                STRING,
     seller_zip_code_prefix   INT,
     seller_city              STRING,
@@ -142,7 +142,7 @@ USING iceberg
 """)
 
 spark.sql("""
-CREATE TABLE IF NOT EXISTS demo.silver.geolocation(
+CREATE TABLE IF NOT EXISTS olist.silver.geolocation(
     geolocation_zip_code_prefix   INT,
     geolocation_lat               FLOAT,
     geolocation_lng               FLOAT,

@@ -4,12 +4,11 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import logging
-
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col, md5, concat_ws, to_date, dayofweek, month, quarter, year, sum as spark_sum,
-    translate, lower, regexp_replace, trim, length, datediff, unix_timestamp,
-    radians, cos, sin, asin, sqrt, pow, avg as spark_avg, lit, count as spark_count, max as spark_max, date_format, when
+    coalesce, lower, regexp_replace, trim, length, datediff, unix_timestamp,
+    sha2, avg as spark_avg, lit, count as spark_count, max as spark_max, date_format, when
 )
 from ultility import calc_haversine
 
@@ -20,124 +19,248 @@ logger = logging.getLogger("Medallion_Pipeline")
 
 
 logger.info("Đang khởi tạo Spark Session với Apache Iceberg...")
+
+
 spark = SparkSession.builder \
-    .appName("Olist_Data_Warehouse") \
-    .config("spark.jars.packages", "org.apache.iceberg:iceberg-spark-runtime-3.4_2.12:1.4.1") \
-    .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") \
-    .config("spark.sql.catalog.local_catalog", "org.apache.iceberg.spark.SparkCatalog") \
-    .config("spark.sql.catalog.local_catalog.type", "hadoop") \
-    .config("spark.sql.catalog.local_catalog.warehouse", "/content/lakehouse/") \
+    .appName("OlistIceberg") \
+    .config(
+        "spark.jars",
+        "/content/iceberg-spark-runtime-3.4_2.12-1.5.2.jar,"
+        "/content/hadoop-aws-3.3.4.jar,"
+        "/content/aws-java-sdk-bundle-1.12.262.jar"
+    ) \
+    .config(
+        "spark.sql.extensions",
+        "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
+    ) \
+    .config(
+        "spark.sql.catalog.olist",
+        "org.apache.iceberg.spark.SparkCatalog"
+    ) \
+    .config(
+        "spark.sql.catalog.olist.type",
+        "hadoop"
+    ) \
+    .config(
+        "spark.sql.catalog.olist.warehouse",
+        "s3a://olist-brazillian-ecommerce-bigdata/warehouse/"
+    ) \
     .getOrCreate()
 
 catalog = "local_catalog"
 logger.info(" Spark Iceberg đã sẵn sàng!")
 
-def process_gold_dimensions():
-    logger.info(" BẮT ĐẦU TẠO DIMENSION TABLES (GOLD)")
+def process_dim_customers(spark):
+    print("Processing dim_customers...")
+    customers_silver = spark.table(f"{catalog}.silver.customers")
+    dim_customers = customers_silver.select(
+        sha2(concat_ws("||", col("customer_unique_id")), 256).alias("customer_key"),
+        col("customer_unique_id"),
+        col("customer_zip_code_prefix"),
+        col("customer_city"),
+        col("customer_state")
+    ).dropDuplicates(["customer_key"])
 
-    # 1. BẢNG DIM CUSTOMERS
-    spark.table(f"{catalog}.silver.customers").select("customer_unique_id", "customer_zip_code_prefix", "customer_city", "customer_state") \
-         .dropDuplicates(["customer_unique_id"]).withColumn("customer_key", md5(col("customer_unique_id"))) \
-         .write.format("iceberg").mode("overwrite").saveAsTable(f"{catalog}.gold.dim_customers")
+    dim_customers.writeTo(f"{catalog}.gold.dim_customers").using("iceberg") \
+        .tableProperty("format-version", "2").createOrReplace()
 
-    # 3. DIM PRODUCTS (Đã có bản dịch tiếng Anh)
-    df_trans = spark.read.parquet("/content/bronze/product_category_name_translation.parquet")
+def process_dim_products(spark):
+    print("Processing dim_products...")
+    products_silver = spark.table("olist.silver.products")
+    dim_products = products_silver.select(
+        sha2(concat_ws("||", col("product_id")), 256).alias("product_key"),
+        col("product_id"),
+        col("product_category_name").alias("category_name_english"),
+        col("product_weight_g"),
+        col("product_length_cm"),
+        col("product_height_cm"),
+        col("product_width_cm")
+    ).dropDuplicates(["product_key"])
 
-    spark.table(f"{catalog}.silver.products") \
-         .join(df_trans, "product_category_name", "left") \
-         .select("product_id",
-                 col("product_category_name_english").alias("category_name_english"),
-                 "product_weight_g", "product_length_cm", "product_height_cm", "product_width_cm") \
-         .dropDuplicates(["product_id"]) \
-         .withColumn("product_key", md5(col("product_id"))) \
-         .write.format("iceberg").mode("overwrite").saveAsTable(f"{catalog}.gold.dim_products")
+    dim_products.writeTo("olist.gold.dim_products").using("iceberg") \
+        .tableProperty("format-version", "2").createOrReplace()
+         
+def process_dim_sellers(spark):
+    print("Processing dim_sellers...")
+    sellers_silver = spark.table("olist.silver.sellers")
+    dim_sellers = sellers_silver.select(
+        sha2(concat_ws("||", col("seller_id")), 256).alias("seller_key"),
+        col("seller_id"),
+        col("seller_zip_code_prefix"),
+        col("seller_city"),
+        col("seller_state")
+    ).dropDuplicates(["seller_key"])
 
-    # 2. DIM SELLERS
-    spark.table(f"{catalog}.silver.sellers") \
-         .select("seller_id", "seller_zip_code_prefix", "seller_city", "seller_state") \
-         .dropDuplicates(["seller_id"]) \
-         .withColumn("seller_key", md5(col("seller_id"))) \
-         .write.format("iceberg").mode("overwrite").saveAsTable(f"{catalog}.gold.dim_sellers")
+    dim_sellers.writeTo("olist.gold.dim_sellers").using("iceberg") \
+        .tableProperty("format-version", "2").createOrReplace()
 
-    # 4. BẢNG DIM DATE
-    df_orders = spark.table(f"{catalog}.silver.orders")
-    df_orders.select(to_date(col("order_purchase_timestamp")).alias("full_date")) \
-             .dropDuplicates().filter(col("full_date").isNotNull()) \
-             .withColumn("date_key", md5(col("full_date").cast("string"))) \
-             .withColumn("formatted_date", date_format(col("full_date"), "yyyy-MM-dd HH:mm:ss")) \
-             .withColumn("day_of_week", dayofweek(col("full_date"))) \
-             .withColumn("month", month(col("full_date"))) \
-             .withColumn("quarter", quarter(col("full_date"))) \
-             .withColumn("year", year(col("full_date"))) \
-             .withColumn("is_weekend", when(col("day_of_week").isin([1, 7]), True).otherwise(False)) \
-             .withColumn("is_holiday", lit(False)) \
-             .write.format("iceberg").mode("overwrite").saveAsTable(f"{catalog}.gold.dim_date")
+def process_dim_date(spark):
+    print("Processing dim_date...")
+    date_df = spark.sql("""
+    SELECT explode(
+        sequence(
+            to_date('2016-01-01'),
+            to_date('2019-12-31'),
+            interval 1 day
+        )
+    ) AS full_date
+    """)
 
-    logger.info(" Đã tạo xong 4 bảng Dimensions (Khớp ERD)!")
-    
-def process_gold_facts():
-    logger.info(" BẮT ĐẦU TẠO FACT TABLES (GOLD)")
+    dim_date = date_df.select(
+        date_format(col("full_date"), "yyyyMMdd").alias("date_key"),
+        col("full_date"),
+        date_format(col("full_date"), "EEEE").alias("day_of_week"),
+        when(dayofweek(col("full_date")).isin([1, 7]), True).otherwise(False).alias("is_weekend"),
+        month(col("full_date")).alias("month"),
+        quarter(col("full_date")).alias("quarter"),
+        year(col("full_date")).alias("year"),
+        lit(False).alias("is_holiday")
+    )
 
-    df_orders = spark.table(f"{catalog}.silver.orders")
-    df_items = spark.table(f"{catalog}.silver.order_items")
-    df_customers = spark.table(f"{catalog}.silver.customers")
-    df_sellers = spark.table(f"{catalog}.silver.sellers")
-    df_reviews = spark.table(f"{catalog}.silver.order_reviews")
-    df_geo = spark.table(f"{catalog}.silver.geolocation")
+    dim_date.writeTo("olist.gold.dim_date").using("iceberg") \
+        .tableProperty("format-version", "2").createOrReplace()
 
-    # SỬA Ở ĐÂY: Thêm cột is_voucher để sau này tính Tỷ lệ xài mã giảm giá
+def process_fact_sales(spark):
+    print("Processing fact_sales...")
+    spark.sql("CREATE NAMESPACE IF NOT EXISTS olist.gold")
+
+    orders_silver = spark.table("olist.silver.orders")
+    customers_silver = spark.table("olist.silver.customers")
+    order_items_silver = spark.table("olist.silver.order_items")
+    payments_silver = spark.table("olist.silver.order_payments")
+
+    dim_customers = spark.table("olist.gold.dim_customers")
+    dim_products = spark.table("olist.gold.dim_products")
+    dim_sellers = spark.table("olist.gold.dim_sellers")
+
+    # Use correct payment names (payment_installments, payment_value)
+    payments_agg = payments_silver.groupBy("order_id").agg(
+        sum("payment_value").alias("payment_value"),
+        max("payment_installments").alias("payment_installments")
+    )
+
+    fact_sales = (
+        order_items_silver.alias("oi")
+        .join(orders_silver.alias("o"), "order_id")
+        .join(payments_agg.alias("p_agg"), "order_id", "left")
+        .join(customers_silver.alias("cs"), col("o.customer_id") == col("cs.customer_id"), "left")
+        .join(dim_customers.alias("dc"), col("cs.customer_unique_id") == col("dc.customer_unique_id"), "left")
+        .join(dim_products.alias("dp"), "product_id", "left")
+        .join(dim_sellers.alias("ds"), "seller_id", "left")
+    )
+
+    fact_sales = fact_sales.select(
+        sha2(concat_ws("||", col("order_id"), col("order_item_id")), 256).alias("sale_key"),
+        col("dc.customer_key"),
+        col("dp.product_key"),
+        col("ds.seller_key"),
+        date_format(col("o.order_purchase_timestamp"), "yyyyMMdd").alias("date_key"),
+        col("price"),
+        col("freight_value"),
+        col("p_agg.payment_value"),
+        col("p_agg.payment_installments")
+    ).dropDuplicates()
+
+    fact_sales.writeTo("olist.gold.fact_sales").using("iceberg").tableProperty("format-version", "2").createOrReplace()
+
     df_payments = spark.table(f"{catalog}.silver.order_payments").groupBy("order_id").agg(
         spark_sum("payment_value").alias("payment_value"),
         spark_max("payment_installments").alias("payment_installments"),
         spark_max(when(col("payment_type") == "voucher", 1).otherwise(0)).alias("is_voucher")
     )
 
-    df_base = df_items.join(df_orders, "order_id", "inner").join(df_customers, "customer_id", "inner")
 
-    # FACT SALES (Đã có order_status để tính Hủy đơn, và is_voucher để tính Mã giảm giá)
-    df_base.join(df_payments, "order_id", "left") \
-        .withColumn("sale_key", md5(concat_ws("_", col("order_id"), col("order_item_id")))) \
-        .withColumn("customer_key", md5(col("customer_unique_id"))) \
-        .withColumn("product_key", md5(col("product_id"))) \
-        .withColumn("seller_key", md5(col("seller_id"))) \
-        .withColumn("date_key", md5(to_date(col("order_purchase_timestamp")).cast("string"))) \
-        .select("sale_key", "customer_key", "product_key", "seller_key", "date_key",
-                "order_id", "order_status", "price", "freight_value", "payment_value", "payment_installments", "is_voucher") \
-        .write.format("iceberg").mode("overwrite").saveAsTable(f"{catalog}.gold.fact_sales")
+def process_fact_reviews(spark):
+    print("Processing fact_reviews...")
+    spark.sql("CREATE NAMESPACE IF NOT EXISTS olist.gold")
 
-    # FACT REVIEWS
-    df_reviews.join(df_base.dropDuplicates(["order_id"]), "order_id", "inner") \
-        .withColumn("review_key", md5(col("review_id"))) \
-        .withColumn("customer_key", md5(col("customer_unique_id"))) \
-        .withColumn("product_key", md5(col("product_id"))) \
-        .withColumn("seller_key", md5(col("seller_id"))) \
-        .withColumn("date_key", md5(to_date(col("order_purchase_timestamp")).cast("string"))) \
-        .withColumn("comment_length", length(col("review_comment_message"))) \
-        .withColumn("response_time_hours", (unix_timestamp("review_answer_timestamp") - unix_timestamp("review_creation_date")) / 3600) \
-        .select("review_key", "customer_key", "product_key", "seller_key", "date_key", "review_score", "comment_length", "response_time_hours") \
-        .write.format("iceberg").mode("overwrite").saveAsTable(f"{catalog}.gold.fact_reviews")
+    reviews_silver = spark.table("olist.silver.order_reviews")
+    orders_silver = spark.table("olist.silver.orders")
+    order_items_silver = spark.table("olist.silver.order_items")
+    customers_silver = spark.table("olist.silver.customers")
 
-    # FACT SHIPPING
-    df_geo_cust = df_geo.withColumnRenamed("geolocation_zip_code_prefix", "cust_zip").withColumnRenamed("geo_lat", "cust_lat").withColumnRenamed("geo_lng", "cust_lng")
-    df_geo_sell = df_geo.withColumnRenamed("geolocation_zip_code_prefix", "sell_zip").withColumnRenamed("geo_lat", "sell_lat").withColumnRenamed("geo_lng", "sell_lng")
+    dim_customers = spark.table("olist.gold.dim_customers")
+    dim_products = spark.table("olist.gold.dim_products")
+    dim_sellers = spark.table("olist.gold.dim_sellers")
 
-    df_base.join(df_sellers, "seller_id", "inner") \
-        .join(df_geo_cust, col("customer_zip_code_prefix") == col("cust_zip"), "left") \
-        .join(df_geo_sell, col("seller_zip_code_prefix") == col("sell_zip"), "left") \
-        .withColumn("shipping_key", md5(concat_ws("_", col("order_id"), col("order_item_id")))) \
-        .withColumn("customer_key", md5(col("customer_unique_id"))) \
-        .withColumn("product_key", md5(col("product_id"))) \
-        .withColumn("seller_key", md5(col("seller_id"))) \
-        .withColumn("date_key", md5(to_date(col("order_purchase_timestamp")).cast("string"))) \
-        .withColumn("delivery_lead_time", datediff("order_delivered_customer_date", "order_purchase_timestamp")) \
-        .withColumn("estimated_delivery_error", datediff("order_estimated_delivery_date", "order_delivered_customer_date")) \
-        .withColumn("is_late", col("order_delivered_customer_date") > col("order_estimated_delivery_date")) \
-        .withColumn("shipping_distance_km", calc_haversine("cust_lat", "cust_lng", "sell_lat", "sell_lng")) \
-        .select("shipping_key", "customer_key", "product_key", "seller_key", "date_key", "delivery_lead_time", "estimated_delivery_error", "shipping_distance_km", "is_late") \
-        .write.format("iceberg").mode("overwrite").saveAsTable(f"{catalog}.gold.fact_shipment")
+    reviews_base = (
+        reviews_silver.alias("r")
+        .join(orders_silver.alias("o"), "order_id")
+        .join(order_items_silver.alias("oi"), "order_id")
+    )
 
-    logger.info(" Hoàn tất 3 bảng Fact Sự kiện!")
+    fact_reviews = (
+        reviews_base
+        .join(customers_silver.alias("cs"), col("o.customer_id") == col("cs.customer_id"), "left")
+        .join(dim_customers.alias("dc"), col("cs.customer_unique_id") == col("dc.customer_unique_id"), "left")
+        .join(dim_products.alias("dp"), "product_id", "left")
+        .join(dim_sellers.alias("ds"), "seller_id", "left")
+    )
+
+    fact_reviews = fact_reviews.select(
+        sha2(concat_ws("||", col("review_id"), col("product_id"), col("seller_id")), 256).cast("string").alias("review_key"),
+        col("dc.customer_key").cast("string").alias("customer_key"),
+        date_format(col("review_creation_date"), "yyyyMMdd").cast("string").alias("date_key"),
+        col("order_id").cast("string").alias("order_id"),
+        col("review_score").cast("int").alias("review_score"),
+        length(coalesce(col("review_comment_message"), lit(""))).cast("int").alias("comment_length"),
+        col("review_answer_timestamp").cast("timestamp").alias("response_time")
+    ).dropDuplicates()
+
+    fact_reviews.writeTo("olist.gold.fact_reviews").using("iceberg").tableProperty("format-version", "2").createOrReplace()
+        
+def process_fact_shipping(spark):
+    print("Processing fact_shipping...")
+    spark.sql("CREATE NAMESPACE IF NOT EXISTS olist.gold")
+
+    orders_silver = spark.table("olist.silver.orders")
+    order_items_silver = spark.table("olist.silver.order_items")
+    customers_silver = spark.table("olist.silver.customers")
+
+    dim_customers = spark.table("olist.gold.dim_customers")
+    dim_products = spark.table("olist.gold.dim_products")
+    dim_sellers = spark.table("olist.gold.dim_sellers")
+
+    shipping_base = orders_silver.alias("o").join(order_items_silver.alias("oi"), "order_id")
+
+    fact_shipping = (
+        shipping_base
+        .join(customers_silver.alias("cs"), col("o.customer_id") == col("cs.customer_id"), "left")
+        .join(dim_customers.alias("dc"), col("cs.customer_unique_id") == col("dc.customer_unique_id"), "left")
+        .join(dim_products.alias("dp"), "product_id", "left")
+        .join(dim_sellers.alias("ds"), "seller_id", "left")
+    )
+
+    fact_shipping = fact_shipping.select(
+        sha2(concat_ws("||", col("order_id"), col("order_item_id"), col("seller_id")), 256).alias("shipping_key"),
+        col("dc.customer_key"),
+        col("dp.product_key"),
+        col("ds.seller_key"),
+        date_format(col("o.order_purchase_timestamp"), "yyyyMMdd").alias("date_key"),
+        datediff(col("o.order_delivered_customer_date"), col("o.order_purchase_timestamp")).alias("delivery_lead_time"),
+        datediff(col("o.order_delivered_customer_date"), col("o.order_estimated_delivery_date")).alias("estimated_delivery_error"),
+        when(col("o.order_delivered_customer_date") > col("o.order_estimated_delivery_date"), True).otherwise(False).alias("is_late")
+    )
+    fact_shipping = fact_shipping.filter(col("delivery_lead_time").isNotNull()).dropDuplicates()
+
+    fact_shipping.sort("date_key").writeTo("olist.gold.fact_shipping").using("iceberg").tableProperty("format-version", "2").createOrReplace()
+
+def process_dimensions(spark):
+    print(">>> PROCESSING DIMENSION TABLES: SILVER -> GOLD")
+    process_dim_customers(spark)
+    process_dim_products(spark)
+    process_dim_sellers(spark)
+    process_dim_date(spark)
+    print("Dimension tables processed successfully!")
+
+def process_all_facts_fixed(spark):
+    print(">>> PROCESSING FACT TABLES: SILVER -> GOLD")
+    process_fact_sales(spark)
+    process_fact_reviews(spark)
+    process_fact_shipping(spark)
+    print("Fact tables processed successfully!")
+
     
 if __name__ == "__main__":
-    process_gold_dimensions()
-    process_gold_facts()
+    process_dimensions(spark)
+    process_all_facts_fixed(spark)

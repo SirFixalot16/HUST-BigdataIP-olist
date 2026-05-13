@@ -37,20 +37,20 @@ spark = (
     # Specify the S3A filesystem implementation
 
     .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-    # Configure a Spark catalog named "demo" using Iceberg
+    # Configure a Spark catalog named "olist" using Iceberg
     .config(
-        "spark.sql.catalog.demo",
+        "spark.sql.catalog.olist",
         "org.apache.iceberg.spark.SparkCatalog"
     )
     # Use Hadoop-based catalog for Iceberg metadata management
     .config(
-        "spark.sql.catalog.demo.type",
+        "spark.sql.catalog.olist.type",
         "hadoop"
     )
     # Define the warehouse location in S3 for Iceberg tables
     .config(
-        "spark.sql.catalog.demo.warehouse",
-        "s3a://big-data-didp-bucket/warehouse/"
+        "spark.sql.catalog.olist.warehouse",
+        "s3a://olist-brazillian-ecommerce-bigdata/warehouse/"
     )
     .getOrCreate()
 )
@@ -58,11 +58,11 @@ spark = (
 print("Starting to create database and tables for the bronze layer")
 
 spark.sql("""
-CREATE NAMESPACE IF NOT EXISTS demo.bronze
+CREATE NAMESPACE IF NOT EXISTS olist.bronze
 """)
 
 spark.sql("""
-CREATE TABLE IF NOT EXISTS demo.bronze.olist_customers_dataset (
+CREATE TABLE IF NOT EXISTS olist.bronze.olist_customers_dataset (
     customer_id STRING,
     customer_unique_id STRING,
     customer_zip_code_prefix INT,
@@ -73,7 +73,7 @@ USING iceberg
 """)
 
 spark.sql("""
-CREATE TABLE IF NOT EXISTS demo.bronze.olist_orders_dataset (
+CREATE TABLE IF NOT EXISTS olist.bronze.olist_orders_dataset (
     order_id                        STRING,
     customer_id                     STRING,
     order_status                    STRING,
@@ -87,7 +87,7 @@ USING iceberg
 """)
 
 spark.sql("""
-CREATE TABLE IF NOT EXISTS demo.bronze.olist_order_items_dataset (
+CREATE TABLE IF NOT EXISTS olist.bronze.olist_order_items_dataset (
     order_id              STRING,
     order_item_id         INT,
     product_id            STRING,
@@ -100,7 +100,7 @@ USING iceberg
 """)
 
 spark.sql("""
-CREATE TABLE IF NOT EXISTS demo.bronze.olist_order_payments_dataset (
+CREATE TABLE IF NOT EXISTS olist.bronze.olist_order_payments_dataset (
     order_id               STRING,
     payment_sequential     INT,
     payment_type           STRING,
@@ -111,7 +111,7 @@ USING iceberg
 """)
 
 spark.sql("""
-CREATE TABLE IF NOT EXISTS demo.bronze.olist_products_dataset (
+CREATE TABLE IF NOT EXISTS olist.bronze.olist_products_dataset (
     product_id                   STRING,
     product_category_name        STRING,
     product_name_lenght          FLOAT,
@@ -126,7 +126,7 @@ USING iceberg
 """)
 
 spark.sql("""
-CREATE TABLE IF NOT EXISTS demo.bronze.olist_order_reviews_dataset (
+CREATE TABLE IF NOT EXISTS olist.bronze.olist_order_reviews_dataset (
     review_id                 STRING,
     order_id                  STRING,
     review_score              INT,
@@ -139,7 +139,7 @@ USING iceberg
 """)
 
 spark.sql("""
-CREATE TABLE IF NOT EXISTS demo.bronze.olist_sellers_dataset (
+CREATE TABLE IF NOT EXISTS olist.bronze.olist_sellers_dataset (
     seller_id                STRING,
     seller_zip_code_prefix   INT,
     seller_city              STRING,
@@ -149,7 +149,7 @@ USING iceberg
 """)
 
 spark.sql("""
-CREATE TABLE IF NOT EXISTS demo.bronze.olist_geolocation_dataset (
+CREATE TABLE IF NOT EXISTS olist.bronze.olist_geolocation_dataset (
     geolocation_zip_code_prefix   STRING,
     geolocation_lat               FLOAT,
     geolocation_lng               FLOAT,

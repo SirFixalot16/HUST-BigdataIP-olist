@@ -6,36 +6,47 @@ import seaborn as sns
 import logging
 
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import (
-    col, md5, concat_ws, to_date, dayofweek, month, quarter, year, sum as spark_sum,
-    translate, lower, regexp_replace, trim, length, datediff, unix_timestamp,
-    radians, cos, sin, asin, sqrt, pow, avg as spark_avg, lit, count as spark_count, max as spark_max, date_format, when
-)
-from ultility import clean_city_name
+from pyspark.sql.functions import col, avg as spark_avg
+from ultility import clean_city_name, fix_product_name
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("Medallion_Pipeline")
 
-
-
 logger.info("Đang khởi tạo Spark Session với Apache Iceberg...")
+
 spark = SparkSession.builder \
-    .appName("Olist_Data_Warehouse") \
-    .config("spark.jars.packages", "org.apache.iceberg:iceberg-spark-runtime-3.4_2.12:1.4.1") \
-    .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") \
-    .config("spark.sql.catalog.local_catalog", "org.apache.iceberg.spark.SparkCatalog") \
-    .config("spark.sql.catalog.local_catalog.type", "hadoop") \
-    .config("spark.sql.catalog.local_catalog.warehouse", "/content/lakehouse/") \
+    .appName("OlistIceberg") \
+    .config(
+        "spark.jars",
+        "/content/iceberg-spark-runtime-3.4_2.12-1.5.2.jar,"
+        "/content/hadoop-aws-3.3.4.jar,"
+        "/content/aws-java-sdk-bundle-1.12.262.jar"
+    ) \
+    .config(
+        "spark.sql.extensions",
+        "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
+    ) \
+    .config(
+        "spark.sql.catalog.olist",
+        "org.apache.iceberg.spark.SparkCatalog"
+    ) \
+    .config(
+        "spark.sql.catalog.olist.type",
+        "hadoop"
+    ) \
+    .config(
+        "spark.sql.catalog.olist.warehouse",
+        "s3a://olist-brazillian-ecommerce-bigdata/warehouse/"
+    ) \
     .getOrCreate()
 
 catalog = "local_catalog"
 logger.info(" Spark Iceberg đã sẵn sàng!")
 
-def process_silver():
-    logger.info(" BẮT ĐẦU TẦNG SILVER: LÀM SẠCH VÀ XỬ LÝ DỮ LIỆU KHÔNG KHỚP THAM CHIẾU")
-
-    # 1. CUSTOMERS
-    df_cust_raw = spark.read.parquet("/content/bronze/olist_customers_dataset.parquet")
+def process_bronze_customers():
+    
+    logger.info("")
+    df_cust_raw = spark.read.parquet("s3a://olist-brazillian-ecommerce-bigdata/raw/olist/customers/")
     r1 = df_cust_raw.count()
     df_cust = df_cust_raw.dropDuplicates(["customer_id"]).filter(col("customer_id").isNotNull()) \
                          .withColumn("customer_city", clean_city_name("customer_city")).filter(col("customer_city") != "")
@@ -43,9 +54,28 @@ def process_silver():
     c1 = spark.table(f"{catalog}.silver.customers").count()
     logger.info(f"  [Customers] Giữ lại {c1}/{r1} dòng (Loại bỏ {r1-c1} bản ghi lỗi định dạng).")
 
-   # 2. PRODUCTS (các thông số không được âm)
-   # Thêm các filter chặn số âm cho toàn bộ kích thước và số lượng
-    df_prod_raw = spark.read.parquet("/content/bronze/olist_products_dataset.parquet")
+def process_bronze_orders():
+
+    df_orders_raw = spark.read.parquet("s3a://olist-brazillian-ecommerce-bigdata/raw/olist/orders/")
+    r5 = df_orders_raw.count()
+    for date_col in ["order_purchase_timestamp", "order_approved_at", "order_delivered_carrier_date", "order_delivered_customer_date", "order_estimated_delivery_date"]:
+        df_orders = df_orders_raw.withColumn(date_col, col(date_col).cast("timestamp"))
+
+    df_orders = df_orders.filter(
+        # 1. Mua hàng <= Duyệt đơn
+        ((col("order_purchase_timestamp") <= col("order_approved_at")) | col("order_approved_at").isNull()) &
+        # 2. Duyệt đơn <= Giao kho
+        ((col("order_approved_at") <= col("order_delivered_carrier_date")) | col("order_delivered_carrier_date").isNull()) &
+        # 3. Giao kho <= Khách nhận
+        ((col("order_delivered_carrier_date") <= col("order_delivered_customer_date")) | col("order_delivered_customer_date").isNull())
+    ).dropDuplicates(["order_id"]).filter(col("order_id").isNotNull())
+    
+    df_orders.write.format("iceberg").mode("overwrite").saveAsTable(f"{catalog}.silver.orders")
+    c5 = spark.table(f"{catalog}.silver.orders").count()
+    logger.info(f"  [Orders] Giữ lại {c5}/{r5} dòng (Loại bỏ {r5-c5} bản ghi sai trình tự thời gian/không khớp mã).")
+
+def process_bronze_products():
+    df_prod_raw = spark.read.parquet("s3a://olist-brazillian-ecommerce-bigdata/raw/olist/products/")
     r2 = df_prod_raw.count()
     df_prod = df_prod_raw.withColumnRenamed("product_name_lenght", "product_name_length") \
         .withColumnRenamed("product_description_lenght", "product_description_length") \
@@ -60,78 +90,39 @@ def process_silver():
         .filter((col("product_name_length") >= 0) | col("product_name_length").isNull()) \
         .filter((col("product_description_length") >= 0) | col("product_description_length").isNull()) \
         .filter((col("product_photos_qty") >= 0) | col("product_photos_qty").isNull())
-
+    df_prod = fix_product_name(df_prod)
+    
     df_prod.write.format("iceberg").mode("overwrite").saveAsTable(f"{catalog}.silver.products")
+
     c2 = spark.table(f"{catalog}.silver.products").count()
     logger.info(f"  [Products] Giữ lại {c2}/{r2} dòng (Đã lọc sạch toàn bộ thông số âm).")
 
-    # 3. SELLERS
-    df_sell_raw = spark.read.parquet("/content/bronze/olist_sellers_dataset.parquet")
+    df_prod.write.format("iceberg").mode("overwrite").saveAsTable("olist.silver.products")
+
+def process_bronze_sellers():
+    df_sell_raw = spark.read.parquet("s3a://olist-brazillian-ecommerce-bigdata/raw/olist/sellers/")
     r3 = df_sell_raw.count()
     df_sell = df_sell_raw.dropDuplicates(["seller_id"]).withColumn("seller_city", clean_city_name("seller_city"))
     df_sell.write.format("iceberg").mode("overwrite").saveAsTable(f"{catalog}.silver.sellers")
     c3 = spark.table(f"{catalog}.silver.sellers").count()
     logger.info(f"  [Sellers] Giữ lại {c3}/{r3} dòng (Loại bỏ {r3-c3} bản ghi lỗi định dạng).")
 
-    # 4. GEOLOCATION (Chặn Lat/Lng phi lý)
-    df_geo_raw = spark.read.parquet("/content/bronze/olist_geolocation_dataset.parquet")
-    df_geo_raw.filter((col("geolocation_lat") >= -90) & (col("geolocation_lat") <= 90)) \
-        .filter((col("geolocation_lng") >= -180) & (col("geolocation_lng") <= 180)) \
-        .groupBy("geolocation_zip_code_prefix").agg(spark_avg("geolocation_lat").alias("geo_lat"), spark_avg("geolocation_lng").alias("geo_lng")) \
-        .write.format("iceberg").mode("overwrite").saveAsTable(f"{catalog}.silver.geolocation")
-    logger.info(f"  [Geolocation] Đã chuẩn hóa tọa độ địa lý thành công.")
-
-   # 5. ORDERS (Xử lý không khớp mã khách hàng + Check TRÌNH TỰ THỜI GIAN)
-    df_orders_raw = spark.read.parquet("/content/bronze/olist_orders_dataset.parquet")
-    r5 = df_orders_raw.count()
-    for date_col in ["order_purchase_timestamp", "order_approved_at", "order_delivered_carrier_date", "order_delivered_customer_date", "order_estimated_delivery_date"]:
-        df_orders_raw = df_orders_raw.withColumn(date_col, col(date_col).cast("timestamp"))
-
-    # Thực thi tính toàn vẹn tham chiếu
-    df_orders = df_orders_raw.join(df_cust.select("customer_id"), "customer_id", "left_semi")
-
-    # Kiểm tra trình tự thời gian toàn diện (Purchase -> Approved -> Carrier -> Delivered)
-    df_orders = df_orders.filter(
-        # 1. Mua hàng <= Duyệt đơn
-        ((col("order_purchase_timestamp") <= col("order_approved_at")) | col("order_approved_at").isNull()) &
-        # 2. Duyệt đơn <= Giao kho
-        ((col("order_approved_at") <= col("order_delivered_carrier_date")) | col("order_delivered_carrier_date").isNull()) &
-        # 3. Giao kho <= Khách nhận
-        ((col("order_delivered_carrier_date") <= col("order_delivered_customer_date")) | col("order_delivered_customer_date").isNull())
-    ).dropDuplicates(["order_id"]).filter(col("order_id").isNotNull())
-
-    df_orders.write.format("iceberg").mode("overwrite").saveAsTable(f"{catalog}.silver.orders")
-    c5 = spark.table(f"{catalog}.silver.orders").count()
-    logger.info(f"  [Orders] Giữ lại {c5}/{r5} dòng (Loại bỏ {r5-c5} bản ghi sai trình tự thời gian/không khớp mã).")
-
-    # 6. ORDER ITEMS (Xử lý không khớp mã Đơn hàng/Sản phẩm/Người bán)
-    df_items_raw = spark.read.parquet("/content/bronze/olist_order_items_dataset.parquet")
+def process_bronze_order_items():
+    df_items_raw = spark.read.parquet("s3a://olist-brazillian-ecommerce-bigdata/raw/olist/order_items/")
     r6 = df_items_raw.count()
     df_items = df_items_raw.withColumn("shipping_limit_date", col("shipping_limit_date").cast("timestamp")) \
-        .filter((col("price") >= 0) & (col("freight_value") >= 0)) \
-        .join(df_orders.select("order_id"), "order_id", "left_semi") \
-        .join(df_prod.select("product_id"), "product_id", "left_semi") \
-        .join(df_sell.select("seller_id"), "seller_id", "left_semi").dropDuplicates()
+        .filter((col("price") >= 0) & (col("freight_value") >= 0))
 
     df_items.write.format("iceberg").mode("overwrite").saveAsTable(f"{catalog}.silver.order_items")
     c6 = spark.table(f"{catalog}.silver.order_items").count()
     logger.info(f"  [Order Items] Giữ lại {c6}/{r6} dòng (Loại bỏ {r6-c6} dòng dữ liệu không khớp tham chiếu/giá trị âm).")
-
-    # 7. ORDER PAYMENTS
-    df_pay_raw = spark.read.parquet("/content/bronze/olist_order_payments_dataset.parquet")
-    r7 = df_pay_raw.count()
-    df_pay = df_pay_raw.dropDuplicates().join(df_orders.select("order_id"), "order_id", "left_semi")
-    df_pay.write.format("iceberg").mode("overwrite").saveAsTable(f"{catalog}.silver.order_payments")
-    c7 = spark.table(f"{catalog}.silver.order_payments").count()
-    logger.info(f"  [Payments] Giữ lại {c7}/{r7} dòng (Loại bỏ {r7-c7} thanh toán không khớp mã đơn hàng).")
-
-    # 8. ORDER REVIEWS
-    df_rev_raw = spark.read.parquet("/content/bronze/olist_order_reviews_dataset.parquet")
+    
+def process_bronze_order_reviews():
+    df_rev_raw = spark.read.parquet("s3a://olist-brazillian-ecommerce-bigdata/raw/olist/order_reviews/")
     r8 = df_rev_raw.count()
     df_rev = df_rev_raw.withColumn("review_creation_date", col("review_creation_date").cast("timestamp")) \
         .withColumn("review_answer_timestamp", col("review_answer_timestamp").cast("timestamp")) \
-        .filter((col("review_score") >= 1) & (col("review_score") <= 5)) \
-        .join(df_orders.select("order_id"), "order_id", "left_semi").dropDuplicates(["review_id", "order_id"])
+        .filter((col("review_score") >= 1) & (col("review_score") <= 5))
 
     df_rev.write.format("iceberg").mode("overwrite").saveAsTable(f"{catalog}.silver.order_reviews")
     c8 = spark.table(f"{catalog}.silver.order_reviews").count()
@@ -139,5 +130,36 @@ def process_silver():
 
     logger.info("HOÀN TẤT TẦNG SILVER VỚI DỮ LIỆU ĐÃ ĐƯỢC CHUẨN HÓA THAM CHIẾU!")
 
+def process_bronze_payments():
+    df_pay_raw = spark.read.parquet("s3a://olist-brazillian-ecommerce-bigdata/raw/olist/order_payments/olist_order_payments_dataset.parquet")
+    r7 = df_pay_raw.count()
+    df_pay = df_pay_raw.dropDuplicates()
+    df_pay.write.format("iceberg").mode("overwrite").saveAsTable(f"{catalog}.silver.order_payments")
+    c7 = spark.table(f"{catalog}.silver.order_payments").count()
+    logger.info(f"  [Payments] Giữ lại {c7}/{r7} dòng (Loại bỏ {r7-c7} thanh toán không khớp mã đơn hàng).")
+
+def process_bronze_geolocation():
+    df_geo_raw = spark.read.parquet("s3a://olist-brazillian-ecommerce-bigdata/raw/olist/geolocation/")
+    df_geo_raw.filter((col("geolocation_lat") >= -90) & (col("geolocation_lat") <= 90)) \
+        .filter((col("geolocation_lng") >= -180) & (col("geolocation_lng") <= 180)) \
+        .groupBy("geolocation_zip_code_prefix").agg(spark_avg("geolocation_lat").alias("geo_lat"), spark_avg("geolocation_lng").alias("geo_lng")) \
+        .withColumn("geolocation_city", clean_city_name("geolocation_city")).filter(col("geolocation_city") != "") \
+        .write.format("iceberg").mode("overwrite").saveAsTable(f"{catalog}.silver.geolocation")
+    logger.info(f"  [Geolocation] Đã chuẩn hóa tọa độ địa lý thành công.")
+
+def Bronze2Silver():
+    logger.info(" BẮT ĐẦU TẦNG SILVER: LÀM SẠCH VÀ XỬ LÝ DỮ LIỆU KHÔNG KHỚP THAM CHIẾU")
+
+    process_bronze_geolocation()
+    process_bronze_products()
+    process_bronze_customers()
+    process_bronze_sellers()
+    process_bronze_orders()
+    process_bronze_order_items()
+    process_bronze_order_reviews()
+    process_bronze_payments()
+    
+    print("Bronze to Silver processing completed successfully.")
+
 if __name__ == "__main__":
-    process_silver()
+    Bronze2Silver()

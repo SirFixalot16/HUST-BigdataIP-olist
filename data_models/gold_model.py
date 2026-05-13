@@ -41,7 +41,7 @@ spark = (
     )
     .config(
         "spark.sql.catalog.demo.warehouse",
-        "s3a://big-data-didp-bucket/warehouse/"
+        "s3a://olist-brazillian-ecommerce-bigdata/warehouse/"
     )
     .getOrCreate()
 )
@@ -49,11 +49,11 @@ spark = (
 print("Starting to create database and tables for the GOLD layer")
 
 spark.sql("""
-CREATE DATABASE IF NOT EXISTS glue_catalog.gold
+CREATE DATABASE IF NOT EXISTS olist.gold
 """)
 
 spark.sql("""
-CREATE TABLE IF NOT EXISTS glue_catalog.gold.dim_sellers (
+CREATE TABLE IF NOT EXISTS olist.gold.dim_sellers (
     seller_key              STRING,
     seller_id               STRING,
     seller_zip_code_prefix  INT,
@@ -64,7 +64,7 @@ USING iceberg
 """)
 
 spark.sql("""
-CREATE TABLE IF NOT EXISTS glue_catalog.gold.dim_products (
+CREATE TABLE IF NOT EXISTS olist.gold.dim_products (
     product_key             STRING,
     product_id              STRING,
     category_name_english   STRING,
@@ -77,7 +77,7 @@ USING iceberg
 """)
 
 spark.sql("""
-CREATE TABLE IF NOT EXISTS glue_catalog.gold.dim_customers (
+CREATE TABLE IF NOT EXISTS olist.gold.dim_customers (
     customer_key                STRING,
     customer_unique_id          STRING,
     customer_zip_code_prefix    INT,
@@ -88,7 +88,7 @@ USING iceberg
 """)
 
 spark.sql("""
-CREATE TABLE IF NOT EXISTS glue_catalog.gold.dim_date (
+CREATE TABLE IF NOT EXISTS olist.gold.dim_date (
     date_key    STRING,
     full_date   TIMESTAMP,
     day_of_week INT,
@@ -102,7 +102,7 @@ USING iceberg
 """)
 
 spark.sql("""
-CREATE TABLE IF NOT EXISTS glue_catalog.gold.fact_sales (
+CREATE TABLE IF NOT EXISTS olist.gold.fact_sales (
     sale_key                STRING,
     customer_key            STRING,
     product_key             STRING,
@@ -117,12 +117,11 @@ USING iceberg
 """)
 
 spark.sql("""
-CREATE TABLE IF NOT EXISTS glue_catalog.gold.fact_reviews (
+CREATE TABLE IF NOT EXISTS olist.gold.fact_reviews (
     review_key      STRING,
     customer_key    STRING,
-    product_key     STRING,
-    seller_key      STRING,
     date_key        STRING,
+    order_id        STRING,
     review_score    INT,
     comment_length  INT,
     response_time   INT
@@ -131,7 +130,7 @@ USING iceberg
 """)
 
 spark.sql("""
-CREATE TABLE IF NOT EXISTS glue_catalog.gold.fact_shipping (
+CREATE TABLE IF NOT EXISTS olist.gold.fact_shipping (
     shipping_key                STRING,
     customer_key                STRING,
     product_key                 STRING,

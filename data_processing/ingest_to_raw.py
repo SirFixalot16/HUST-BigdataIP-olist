@@ -26,17 +26,54 @@ bronze_dir = "/content/bronze"
 
 logger.info("BẮT ĐẦU CHUYỂN ĐỔI CSV SANG PARQUET...")
 
-def upload_csv_to_parquet(csv_dir, bronze_dir):
-    for file_name in os.listdir(csv_dir):
-        if file_name.endswith(".csv"):
-            csv_path = os.path.join(csv_dir, file_name)
-            parquet_name = file_name.replace(".csv", ".parquet")
-            parquet_path = os.path.join(bronze_dir, parquet_name)
+def csv2Bronze():
+    spark = SparkSession.builder.getOrCreate()
+    bucket_name = 'olist-brazillian-ecommerce-bigdata'
 
-            df = spark.read.option("header", "true").option("inferSchema", "true").csv(csv_path)
-            df.repartition(1).write.mode("overwrite").parquet(parquet_path)
+    folder_mapping = {
+        'orders': 'raw/olist/orders/',
+        'customers': 'raw/olist/customers/',
+        'products': 'raw/olist/products/',
+        'order_items': 'raw/olist/order_items/',
+        'payments': 'raw/olist/order_payments/',
+        'reviews': 'raw/olist/order_reviews/',
+        'sellers': 'raw/olist/sellers/',
+        'geolocation': 'raw/olist/geolocation/',
+        'translation': 'raw/olist/product_category_name_translation/',
+    }
 
-logger.info("CHUYỂN ĐỔI THÀNH CÔNG! Dữ liệu đã sẵn sàng trong thư mục /content/bronze")
+    uploaded_files = os.listdir('/content')
+
+    for file in uploaded_files:
+        if not file.endswith('.csv'):
+            continue
+
+        target_folder = 'raw/olist/misc/'
+
+        for keyword, s3_folder in folder_mapping.items():
+            if keyword in file:
+                target_folder = s3_folder
+                break
+
+        local_path = f"/content/{file}"
+
+        # Define S3 key for raw CSV upload
+        raw_s3_key = f"{target_folder}{file}"
+
+        # Extract the table name part from target_folder to append to bronze path
+        table_folder = target_folder.replace('raw/olist/', '')
+        bronze_parquet_path = f"s3a://{bucket_name}/warehouse/bronze/{table_folder}"
+
+        # Upload CSV to raw path using boto3
+        print(f"Uploading original CSV to s3://{bucket_name}/{raw_s3_key}...")
+        s3.upload_file(local_path, bucket_name, raw_s3_key)
+
+        # Read local CSV and Write Parquet to bronze path using Spark
+        print(f"Reading {local_path} and writing Parquet to {bronze_parquet_path}...")
+        df = spark.read.csv(local_path, header=True, inferSchema=True)
+        df.write.mode("overwrite").parquet(bronze_parquet_path)
+
+        print(f"Successfully processed {file}.\n")
 
 if __name__ == "__main__":
     upload_csv_to_parquet(csv_dir, bronze_dir)
