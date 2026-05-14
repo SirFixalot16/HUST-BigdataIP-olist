@@ -4,9 +4,6 @@ This directory contains comprehensive tests for ACID compliance and performance 
 
 ## Test Files
 
-### comprehensive_test.py
-Contains both ACID compliance and performance tests for the data pipelines.
-
 **ACID Tests:**
 - **Atomicity**: Ensures all-or-nothing transaction behavior
 - **Consistency**: Validates data integrity constraints
@@ -17,23 +14,6 @@ Contains both ACID compliance and performance tests for the data pipelines.
 - Execution time measurement
 - Throughput calculation
 - Data volume integrity checks
-
-### performance_test_new.py
-Focused performance testing including:
-- Pipeline execution timing
-- Scalability analysis
-- Throughput metrics
-- Data flow validation
-
-### acid_test.py (Legacy)
-Original ACID test file with basic rollback testing.
-
-## Running the Tests
-
-### Prerequisites
-- Apache Spark with Iceberg support
-- Python 3.x
-- PySpark
 
 ### Execution
 ```bash
@@ -73,14 +53,6 @@ The tests measure:
 - **Throughput**: Records processed per second
 - **Scalability**: Performance with increasing data volumes
 - **Data Integrity**: Record count consistency across layers
-
-## Thresholds
-
-Default performance thresholds (adjust based on your environment):
-- Bronze->Silver: < 30 seconds
-- Silver->Gold: < 30 seconds
-- Throughput: > 10 records/second
-- Scalability ratio: < 3x degradation
 
 ## Notes
 
