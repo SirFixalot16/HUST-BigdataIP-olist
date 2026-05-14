@@ -19,27 +19,20 @@ def csv_to_parquet():
 
     spark = (
             SparkSession.builder
-            .appName("csv_to_parquet")
-            .config("spark.jars.packages","org.apache.hadoop:hadoop-aws:3.4.1")
-            .getOrCreate()
-        )
-
-    hadoop_conf = spark._jsc.hadoopConfiguration()
-
-    hadoop_conf.set(
-        "fs.s3a.aws.credentials.provider",
-        "software.amazon.awssdk.auth.credentials.ProfileCredentialsProvider"
-    )
-
-    hadoop_conf.set(
-        "fs.s3a.impl",
-        "org.apache.hadoop.fs.s3a.S3AFileSystem"
-    )
-
-    hadoop_conf.set(
-        "fs.s3a.endpoint",
-        "s3.ap-southeast-2.amazonaws.com"
-    )
+            .appName("bronze_to_silver")
+            .config(
+                "spark.jars.packages",
+                "org.apache.hadoop:hadoop-aws:3.3.4,"
+                "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.2"
+            )
+            .config("spark.sql.extensions","org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") 
+            .config("spark.sql.catalog.olist","org.apache.iceberg.spark.SparkCatalog") 
+            .config("spark.sql.catalog.olist.type", "hadoop") 
+            .config("spark.sql.catalog.olist.warehouse", f"s3a://{BUCKET}/") 
+            .config("spark.hadoop.fs.s3a.aws.credentials.provider",
+                    "com.amazonaws.auth.DefaultAWSCredentialsProviderChain")
+            .getOrCreate() 
+            )
 
     df = spark.read.csv(
         INPUT_CSV,
