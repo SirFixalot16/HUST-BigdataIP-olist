@@ -6,8 +6,8 @@ import json
 from pyspark.sql import SparkSession
 
 CONFIG = 'olist_guest.json'
-filename = "olist_customers_dataset.csv"
-bronze_foldername = "customers"
+filename = "olist_order_reviews_dataset.csv"
+bronze_foldername = "order_reviews"
 
 def csv_to_parquet():
     with open(CONFIG, 'r') as file:
@@ -19,7 +19,7 @@ def csv_to_parquet():
 
     spark = (
             SparkSession.builder
-            .appName("bronze_to_silver")
+            .appName("raw_to_bronze")
             .config(
                 "spark.jars.packages",
                 "org.apache.hadoop:hadoop-aws:3.3.4,"
@@ -51,13 +51,13 @@ def csv_to_parquet():
     spark.stop()
 
 with DAG(
-    dag_id="csv_to_parquet_pipeline",
+    dag_id="raw_to_bronze_pipeline",
     start_date=datetime(2026, 1, 1),
     schedule=None,
     catchup=False
 ) as dag:
 
     convert_task = PythonOperator(
-        task_id="convert_csv_to_parquet",
+        task_id="raw_to_bronze",
         python_callable=csv_to_parquet
     )
